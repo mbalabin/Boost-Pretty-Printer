@@ -34,7 +34,6 @@
 #
 
 from __future__ import print_function
-import datetime
 import re
 from .utils import *
 
@@ -108,49 +107,26 @@ class BoostOptional:
     min_supported_version = (1, 40, 0)
     max_supported_version = last_supported_boost_version
     template_name = 'boost::optional'
-    regex = re.compile('^boost::optional<(.*)>$')
 
     def __init__(self, value):
-        self.typename = value.type_name
         self.value = value
-
-    class _iterator:
-        def __init__(self, member, empty):
-            self.member = member
-            self.done = empty
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            if(self.done):
-                raise StopIteration
-            self.done = True
-            return ('value', self.member.dereference())
-
-        def next(self):
-            return self.__next__()
 
     def children(self):
         initialized = self.value['m_initialized']
-        if(not initialized):
-            return self._iterator('', True)
-        else:
-            match = BoostOptional.regex.search(self.typename)
-            if match:
-                try:
-                    membertype = lookup_type(match.group(1)).pointer()
-                    member = self.value['m_storage']['dummy_']['data'].address.cast(membertype)
-                    return self._iterator(member, False)
-                except:
-                    return self._iterator('', True)
+        if initialized:
+            stored_type = get_basic_type(self.value.basic_type.template_argument(0))
+            m_storage = self.value['m_storage']
+            stored_value = m_storage \
+                if get_basic_type(m_storage.type) == stored_type \
+                else reinterpret_cast(m_storage['dummy_']['data'], stored_type)
+            yield 'value', stored_value
 
     def to_string(self):
         initialized = self.value['m_initialized']
-        if(not initialized):
-            return "%s is not initialized" % self.typename
+        if initialized:
+            return '{} is initialized'.format(self.value.type_name)
         else:
-            return "%s is initialized" % self.typename
+            return '{} is not initialized'.format(self.value.type_name)
 
 
 @add_printer
@@ -364,37 +340,114 @@ class BoostArray:
 
 
 @add_printer
-class BoostVariant:
-    "Pretty Printer for boost::variant (Boost.Variant)"
-    printer_name = 'boost::variant'
-    min_supported_version = (1, 40, 0)
+class BoostSmallVector:
+    """Pretty Printer for boost::container::small_vector"""
+    printer_name = 'boost::container::small_vector'
+    min_supported_version = (1, 58, 0)
     max_supported_version = last_supported_boost_version
-    template_name = 'boost::variant'
-    regex = re.compile('^boost::variant<(.*)>$')
+    template_name = 'boost::container::small_vector'
 
     def __init__(self, value):
-        self.typename = value.type_name
         self.value = value
-        # Due to some mysterious reason, self.value.type template_name(which) does not work unless variadic templates
-        # are disabled using BOOST_VARIANT_DO_NOT_USE_VARIADIC_TEMPLATES.
-        # It might be https://sourceware.org/bugzilla/show_bug.cgi?id=17311
-        m = BoostVariant.regex.search(self.typename)
-        self.types = [s.strip() for s in re.split(
-            r', (?=(?:<[^>]*?(?: [^>]*)*))|, (?=[^>,]+(?:,|$))', m.group(1))]
 
     def to_string(self):
-        which = intptr(self.value['which_'])
-        assert which >= 0, 'Heap backup is not supported'
-        type = self.types[which]
-        return '(boost::variant<...>) type = {}'.format(type)
+        m_holder = self.value['m_holder']
+        static_storage_capacity = int(self.value.type.template_argument(1))
+        capacity = max(static_storage_capacity, int(m_holder['m_capacity']))
+        return 'size={} capacity={}'.format(m_holder['m_size'], capacity)
 
     def children(self):
-        which = intptr(self.value['which_'])
-        assert which >= 0, 'Heap backup is not supported'
-        type = self.types[which]
-        ptrtype = lookup_type(type).pointer()
-        dataptr = self.value['storage_']['data_']['buf'].address.cast(ptrtype)
-        yield 'value', dataptr.dereference()
+        m_holder = self.value['m_holder']
+        size = int(m_holder['m_size'])
+        for idx in range(size):
+            yield '[{}]'.format(idx), m_holder['m_start'][idx]
+
+    def display_hint(self):
+        return 'array'
+
+
+@add_printer
+class BoostSmallVectorBase:
+    """Pretty Printer for boost::container::small_vector_base"""
+    printer_name = 'boost::container::small_vector_base'
+    min_supported_version = (1, 58, 0)
+    max_supported_version = last_supported_boost_version
+    template_name = 'boost::container::small_vector_base'
+
+    def __init__(self, value):
+        self.value = value
+
+    def to_string(self):
+        # The size of a static storage is not known, which means the capacity can not be printed
+        m_holder = self.value['m_holder']
+        return 'size={}'.format(m_holder['m_size'])
+
+    def children(self):
+        m_holder = self.value['m_holder']
+        size = int(m_holder['m_size'])
+        for idx in range(size):
+            yield '[{}]'.format(idx), m_holder['m_start'][idx]
+
+    def display_hint(self):
+        return 'array'
+
+
+@add_printer
+class BoostStaticVector:
+    """Pretty Printer for boost::container::static_vector"""
+    printer_name = 'boost::container::static_vector'
+    min_supported_version = (1, 58, 0)
+    max_supported_version = last_supported_boost_version
+    template_name = 'boost::container::static_vector'
+
+    def __init__(self, value):
+        self.value = value
+
+    def to_string(self):
+        return 'size={}'.format(self.value['m_holder']['m_size'])
+
+    def children(self):
+        element_type = self.value.type.template_argument(0)
+        data_storage = self.value['m_holder']['storage']
+        elements = data_storage.address.cast(element_type.pointer())
+        size = int(self.value['m_holder']['m_size'])
+        for idx in range(size):
+            yield '[{}]'.format(idx), elements[idx]
+
+    def display_hint(self):
+        return 'array'
+
+
+@add_printer
+class BoostDynamicBitset:
+    printer_name = 'boost::dynamic_bitset'
+    min_supported_version = (1, 50, 0)
+    max_supported_version = last_supported_boost_version
+    template_name = 'boost::dynamic_bitset'
+
+    def __init__(self, value):
+        self.value = value
+
+    def to_string(self):
+        return 'size={}'.format(self.value['m_num_bits'])
+
+    def children(self):
+        num_bits = int(self.value['m_num_bits'])
+        block_size = int(self.value['bits_per_block'])
+
+        data_vis = gdb.default_visualizer(self.value['m_bits'])
+        if data_vis is None:
+            return
+        data = [int(value) for index_str, value in data_vis.children()]
+
+        for block_idx, block in enumerate(data):
+            bits_in_block = num_bits % block_size if block_idx == len(data) - 1 else block_size
+            for bit_idx in range(bits_in_block):
+                bit_value = 1 if block & (1 << bit_idx) else 0
+                yield '[{}]'.format(block_idx * block_size + bit_idx), bit_value
+
+    def display_hint(self):
+        return 'array'
 
 
 @add_printer
@@ -413,68 +466,3 @@ class BoostUuid:
         u = (int(self.value['data'][i]) for i in xrange(16))
         s = 'xxxx-xx-xx-xx-xxxxxx'.replace('x', '%02x') % tuple(u)
         return '(%s) %s' % (self.typename, s)
-
-
-@add_printer
-class BoostGregorianDate:
-    "Pretty Printer for boost::gregorian::date"
-    printer_name = 'boost::gregorian::date'
-    min_supported_version = (1, 40, 0)
-    max_supported_version = last_supported_boost_version
-    template_name = 'boost::gregorian::date'
-
-    def __init__(self, value):
-        self.typename = value.type_name
-        self.value = value
-
-    def to_string(self):
-        n = intptr(self.value['days_'])
-        date_int_type_bits = self.value['days_'].type.sizeof * 8
-        # Compatibility fix for gdb+python2, which erroneously converts big 64-bit unsigned
-        # values to negative python ints. It affects various special values and dates in VERY distant future.
-        if n < 0:
-            n += 2**date_int_type_bits
-
-        # Check for uninitialized case
-        if n == 2**date_int_type_bits - 2:
-            return '(%s) uninitialized' % self.typename
-        # Convert date number to year-month-day
-        a = n + 32044
-        b = (4 * a + 3) // 146097
-        c = a - (146097 * b) // 4
-        d = (4 * c + 3) // 1461
-        e = c - (1461 * d) // 4
-        m = (5 * e + 2) // 153
-        day = e + 1 - (153 * m + 2) // 5
-        month = m + 3 - 12 * (m // 10)
-        year = 100 * b + d - 4800 + (m // 10)
-        return '(%s) %4d-%02d-%02d' % (self.typename, year, month, day)
-
-
-@add_printer
-class BoostPosixTimePTime:
-    "Pretty Printer for boost::posix_time::ptime"
-    printer_name = 'boost::posix_time::ptime'
-    min_supported_version = (1, 40, 0)
-    max_supported_version = last_supported_boost_version
-    template_name = 'boost::posix_time::ptime'
-
-    def __init__(self, value):
-        self.typename = value.type_name
-        self.value = value
-
-    def to_string(self):
-        n = int(self.value['time_']['time_count_']['value_'])
-        # Check for uninitialized case
-        if n == 2**63 - 2:
-            return '(%s) uninitialized' % self.typename
-        # Check for boost::posix_time::pos_infin case
-        if n == 2**63 - 1:
-            return '(%s) positive infinity' % self.typename
-        # Check for boost::posix_time::neg_infin case
-        if n == -2**63:
-            return '(%s) negative infinity' % self.typename
-        # Subtract the unix epoch from the timestamp and convert the resulting timestamp into something human readable
-        unix_epoch_time = (n - 210866803200000000) / 1000000.0
-        time_string = datetime.datetime.utcfromtimestamp(unix_epoch_time).isoformat(' ')
-        return '(%s) %sZ' % (self.typename, time_string)

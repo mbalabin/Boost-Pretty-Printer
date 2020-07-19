@@ -18,6 +18,13 @@
 #include <boost/intrusive/sg_set.hpp>
 #include <boost/unordered_map.hpp>
 #include <boost/unordered_set.hpp>
+#if BOOST_VERSION >= 105800
+#include <boost/container/small_vector.hpp>
+#endif
+#if BOOST_VERSION >= 105400
+#include <boost/container/static_vector.hpp>
+#endif
+#include <boost/dynamic_bitset.hpp>
 
 #include <boost/smart_ptr.hpp>
 #if BOOST_VERSION >= 105500
@@ -33,6 +40,13 @@
 #include <boost/date_time/gregorian/gregorian.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/logic/tribool.hpp>
+
+#include <boost/multi_index_container.hpp>
+#include <boost/multi_index/sequenced_index.hpp>
+#include <boost/multi_index/ordered_index.hpp>
+#include <boost/multi_index/hashed_index.hpp>
+#include <boost/multi_index/identity.hpp>
+#include <boost/multi_index/member.hpp>
 
 unsigned const boost_version = BOOST_VERSION;
 
@@ -156,12 +170,39 @@ struct VariantB
 {
     int b_;
 };
+template < typename T >
+struct VariantT
+{
+    T t_;
+};
+template < typename T, typename, typename >
+struct VariantTs
+{
+    T t_;
+};
+struct VariantChar
+{
+    char const* t_;
+};
 
 void test_variant()
 {
-    using Variant = boost::variant<VariantA, VariantB>;
+    using Variant = boost::variant<
+		VariantA,
+		VariantB,
+		VariantT<int>,
+		VariantTs<int, int, int>,
+		VariantChar>;
     Variant variant_a(VariantA{42});
     Variant variant_b(VariantB{24});
+    Variant variant_t(VariantT<int>{53});
+    Variant variant_ts(VariantTs<int, int, int>{35});
+    Variant variant_char(VariantChar{"hello variant!"});
+    
+    double const ** const var_type_1{};
+    const double * * const var_type_2{};
+    const double ** const& var_type_3 = var_type_1;
+        
 break_here:
 	dummy_function();
 }
@@ -751,6 +792,167 @@ break_here:
 	dummy_function();
 }
 
+void test_small_vector()
+{
+#if BOOST_VERSION >= 105800
+	boost::container::small_vector<int, 3> small_vector_1 = {1, 2};
+	boost::container::small_vector<int, 3> small_vector_2 = {1, 2, 3, 4, 5};
+	auto& as_base_vector = static_cast<boost::container::small_vector_base<int>&>(small_vector_1);
+
+	auto iter = small_vector_1.begin();
+	decltype(iter) uninitialized_iter;
+#endif
+break_here:
+	dummy_function();
+}
+
+void test_static_vector()
+{
+#if BOOST_VERSION >= 105400
+	boost::container::static_vector<int, 0> zero_size_vector;
+	boost::container::static_vector<int, 3> static_vector = {1, 2};
+
+	auto iter = static_vector.begin();
+	decltype(iter) uninitialized_iter;
+#endif
+break_here:
+	dummy_function();
+}
+
+void test_dynamic_bitset()
+{
+	boost::dynamic_bitset<> empty_bitset;
+	boost::dynamic_bitset<> bitset(130);
+	bitset[0] = true;
+	bitset[2] = true;
+	bitset[129] = true;
+break_here:
+	dummy_function();
+}
+
+void test_duration()
+{
+    boost::posix_time::time_duration empty_duration;
+    boost::posix_time::time_duration duration_130 = boost::posix_time::seconds(130);
+    boost::posix_time::time_duration duration_3600 = boost::posix_time::seconds(3600);
+    boost::posix_time::time_duration duration_neg_130 = boost::posix_time::seconds(-130);
+    boost::posix_time::time_duration duration_with_ms = boost::posix_time::seconds(61) + boost::posix_time::millisec(10);
+    boost::posix_time::time_duration duration_not_a_time(boost::posix_time::not_a_date_time);
+break_here:
+    dummy_function();
+}
+
+// boost::multi_index
+
+namespace mi = boost::multi_index;
+
+struct mi_tag_sequenced {};
+struct mi_tag_ordered {};
+struct mi_tag_hashed {};
+
+using sequenced_first =  mi::multi_index_container<
+	int,
+	mi::indexed_by<
+		mi::sequenced<
+			mi::tag<mi_tag_sequenced>
+		>,
+		mi::ordered_unique<
+			mi::tag<mi_tag_ordered>,
+			mi::identity<int>
+		>,
+		mi::hashed_unique<
+			mi::tag<mi_tag_hashed>,
+			mi::identity<int>
+		>
+	>
+>;
+
+using ordered_first = mi::multi_index_container<
+	int,
+	mi::indexed_by<
+		mi::ordered_unique<
+			mi::tag<mi_tag_ordered>,
+			mi::identity<int>
+		>,
+		mi::hashed_unique<
+			mi::tag<mi_tag_hashed>,
+			mi::identity<int>
+		>,
+		mi::sequenced<
+			mi::tag<mi_tag_sequenced>
+		>
+	>
+>;
+
+using hashed_first = mi::multi_index_container<
+	int,
+	mi::indexed_by<
+		mi::hashed_unique<
+			mi::tag<mi_tag_hashed>,
+			mi::identity<int>
+		>,
+		mi::sequenced<
+			mi::tag<mi_tag_sequenced>
+		>,
+		mi::ordered_unique<
+			mi::tag<mi_tag_ordered>,
+			mi::identity<int>
+		>
+	>
+>;
+
+using hashed_first_non_unique = mi::multi_index_container<
+	int,
+	mi::indexed_by<
+		mi::hashed_non_unique<
+			mi::tag<mi_tag_hashed>,
+			mi::identity<int>
+		>,
+		mi::sequenced<
+			mi::tag<mi_tag_sequenced>
+		>,
+		mi::ordered_non_unique<
+			mi::tag<mi_tag_ordered>,
+			mi::identity<int>
+		>
+	>
+>;
+
+
+void test_multi_index()
+{
+	sequenced_first sf_empty;
+	ordered_first of_empty;
+	hashed_first hf_empty;
+
+	sequenced_first sf_two;
+	sf_two.push_back(1);
+	sf_two.push_back(2);
+
+	ordered_first of_two;
+	of_two.insert(1);
+	of_two.insert(2);
+
+	hashed_first hf_two;
+	hf_two.insert(1);
+	hf_two.insert(2);
+
+	hashed_first_non_unique hf_over_two_same_value;
+	hf_over_two_same_value.insert(1);
+	hf_over_two_same_value.insert(1);
+	hf_over_two_same_value.insert(1);
+	hf_over_two_same_value.insert(2);
+	hf_over_two_same_value.insert(2);
+	hf_over_two_same_value.insert(2);
+	hf_over_two_same_value.insert(2);
+	hf_over_two_same_value.insert(3);
+	hf_over_two_same_value.insert(3);
+	hf_over_two_same_value.insert(4);
+
+ break_here:
+	dummy_function();
+}
+
 int main()
 {
 	test_iterator_range();
@@ -762,6 +964,9 @@ int main()
 	test_unordered_multimap();
 	test_unordered_set();
 	test_unordered_multiset();
+	test_small_vector();
+	test_static_vector();
+	test_dynamic_bitset();
 
 	test_intrusive_set_base();
 	test_intrusive_rbtree_set_member();
@@ -785,6 +990,9 @@ int main()
 	test_uuid();
 	test_date_time();
 	test_tribool();
+	test_duration();
+
+	test_multi_index();
 
 	return EXIT_SUCCESS;
 }

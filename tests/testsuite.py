@@ -10,6 +10,7 @@ import datetime
 import gdb
 import boost
 import boost.detect_version
+from boost.variant import strip_qualifiers, apply_qualifiers
 
 # Avoiding module 'six' because it might be unavailable
 if sys.version_info.major > 2:
@@ -36,6 +37,9 @@ def execute_cpp_function(function_name):
 
 def to_python_value(value):
     """Convert a gdb.Value to its python equivalent"""
+    if not isinstance(value, gdb.Value):
+        return value
+
     type = value.type
     is_string = type.code in (gdb.TYPE_CODE_ARRAY, gdb.TYPE_CODE_PTR) \
         and type.target().code == gdb.TYPE_CODE_INT and type.target().sizeof == 1
@@ -52,7 +56,7 @@ def to_python_value(value):
     if type.code == gdb.TYPE_CODE_ARRAY:
         return [to_python_value(value[idx]) for idx in range(*type.range())]
     if type.code == gdb.TYPE_CODE_STRUCT:
-        return {name: to_python_value(value[field]) for name, field in gdb.types.deep_items(type)}
+        return {name: to_python_value(value[field]) for name, field in gdb.types.deep_items(type) if not field.is_base_class}
     return value
 
 
@@ -71,7 +75,6 @@ def as_map(children_values, key_func=to_python_value, value_func=to_python_value
     assert len(children_values) % 2 == 0
     it = iter(children_values)
     return [(key_func(key), value_func(value)) for ((key_text, key), (value_text, value)) in zip(it, it)]
-
 
 class PrettyPrinterTest(unittest.TestCase):
     """Base class for all printer tests"""
@@ -344,22 +347,146 @@ class ArrayTest(PrettyPrinterTest):
         self.assertEqual(display_hint, 'array')
 
 
+@unittest.skipIf(boost_version < (1, 58), 'implemented in boost 1.58 and later')
+class SmallVectorTest(PrettyPrinterTest):
+    @classmethod
+    def setUpClass(cls):
+        execute_cpp_function('test_small_vector')
+
+    def test_small_vector_1(self):
+        string, children, display_hint = self.get_printer_result('small_vector_1')
+        self.assertEqual(string, 'size=2 capacity=3')
+        self.assertEqual(as_array(children), [1, 2])
+        self.assertEqual(display_hint, 'array')
+
+    def test_small_vector_2(self):
+        string, children, display_hint = self.get_printer_result('small_vector_2')
+        self.assertEqual(string, 'size=5 capacity=5')
+        self.assertEqual(as_array(children), [1, 2, 3, 4, 5])
+        self.assertEqual(display_hint, 'array')
+
+    def test_small_vector_base(self):
+        string, children, display_hint = self.get_printer_result('as_base_vector')
+        self.assertEqual(string, 'size=2')
+        self.assertEqual(as_array(children), [1, 2])
+        self.assertEqual(display_hint, 'array')
+
+    def test_empty_iter(self):
+        string, children, display_hint = self.get_printer_result('uninitialized_iter')
+        self.assertEqual(string, None)
+        self.assertEqual(children, [])
+        self.assertEqual(display_hint, None)
+
+    def test_iter(self):
+        string, children, display_hint = self.get_printer_result('iter')
+        self.assertEqual(string, None)
+        self.assertEqual(as_struct(children), {'value': 1})
+        self.assertEqual(display_hint, None)
+
+
+@unittest.skipIf(boost_version < (1, 58), 'Printer was implemented for boost 1.58 and later versions')
+class StaticVectorTest(PrettyPrinterTest):
+    @classmethod
+    def setUpClass(cls):
+        execute_cpp_function('test_static_vector')
+
+    def test_zero_size_vector(self):
+        string, children, display_hint = self.get_printer_result('zero_size_vector')
+        self.assertEqual(string, 'size=0')
+        self.assertEqual(as_array(children), [])
+        self.assertEqual(display_hint, 'array')
+
+    def test_static_vector(self):
+        string, children, display_hint = self.get_printer_result('static_vector')
+        self.assertEqual(string, 'size=2')
+        self.assertEqual(as_array(children), [1, 2])
+        self.assertEqual(display_hint, 'array')
+
+    def test_empty_iter(self):
+        string, children, display_hint = self.get_printer_result('uninitialized_iter')
+        self.assertEqual(string, None)
+        self.assertEqual(children, [])
+        self.assertEqual(display_hint, None)
+
+    def test_iter(self):
+        string, children, display_hint = self.get_printer_result('iter')
+        self.assertEqual(string, None)
+        self.assertEqual(as_struct(children), {'value': 1})
+        self.assertEqual(display_hint, None)
+
+
+class DynamicBitsetTest(PrettyPrinterTest):
+    @classmethod
+    def setUpClass(cls):
+        execute_cpp_function('test_dynamic_bitset')
+
+    def test_empty_bitset(self):
+        string, children, display_hint = self.get_printer_result('empty_bitset')
+        self.assertEqual(string, 'size=0')
+        self.assertEqual(as_array(children), [])
+        self.assertEqual(display_hint, 'array')
+
+    def test_big_bitset(self):
+        string, children, display_hint = self.get_printer_result('bitset')
+        self.assertEqual(string, 'size=130')
+        expected = [0] * 130
+        expected[0] = 1
+        expected[2] = 1
+        expected[129] = 1
+        self.assertEqual(as_array(children), expected)
+        self.assertEqual(display_hint, 'array')
+
+
 class VariantTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
         execute_cpp_function('test_variant')
 
+    def check_type(self, var_name):
+        """Check that variable type is restored from string correctly"""
+        var = gdb.parse_and_eval(var_name)
+        base_type_name, qualifiers = strip_qualifiers(str(var.type))
+        recovered_type = apply_qualifiers(gdb.lookup_type(base_type_name), qualifiers)
+        self.assertEqual(var.type.name, recovered_type.name)
+
     def test_variant_a(self):
         string, children, display_hint = self.get_printer_result('variant_a')
         self.assertEqual(string, '(boost::variant<...>) type = VariantA')
-        self.assertEqual(as_struct(children), {'value': {'a_': 42}})
+        self.assertEqual(as_struct(children), {'VariantA': {'a_': 42}})
         self.assertIsNone(display_hint)
 
     def test_variant_b(self):
         string, children, display_hint = self.get_printer_result('variant_b')
         self.assertEqual(string, '(boost::variant<...>) type = VariantB')
-        self.assertEqual(as_struct(children), {'value': {'b_': 24}})
+        self.assertEqual(as_struct(children), {'VariantB': {'b_': 24}})
         self.assertIsNone(display_hint)
+
+    def test_variant_t(self):
+        string, children, display_hint = self.get_printer_result('variant_t')
+        self.assertEqual(string, '(boost::variant<...>) type = VariantT<int>')
+        self.assertEqual(as_struct(children), {'VariantT<int>': {'t_': 53}})
+        self.assertIsNone(display_hint)
+
+    def test_variant_ts(self):
+        string, children, display_hint = self.get_printer_result('variant_ts')
+        self.assertEqual(string, '(boost::variant<...>) type = VariantTs<int, int, int>')
+        self.assertEqual(as_struct(children), {'VariantTs<int, int, int>': {'t_': 35}})
+        self.assertIsNone(display_hint)
+
+    def test_variant_char(self):
+        string, children, display_hint = self.get_printer_result('variant_char')
+        self.assertEqual(string, '(boost::variant<...>) type = VariantChar')
+        self.assertEqual(as_struct(children), {'VariantChar': {'t_': 'hello variant!'}})
+        self.assertIsNone(display_hint)
+
+    def test_type1(self):
+        self.check_type('var_type_1')
+
+    def test_type2(self):
+        self.check_type('var_type_2')
+
+    def test_type3(self):
+        self.check_type('var_type_3')
 
 
 @unittest.skipIf(boost_version < (1, 42, 0), 'implemented in boost 1.42 and later')
@@ -507,7 +634,7 @@ class FlatMapTest(PrettyPrinterTest):
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveBaseSetTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -584,35 +711,35 @@ class IntrusiveMemberSetCommon:
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberRbtreeSetTest(PrettyPrinterTest, IntrusiveMemberSetCommon):
     @classmethod
     def setUpClass(cls):
         execute_cpp_function('test_intrusive_rbtree_set_member')
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberAvlTreeSetTest(PrettyPrinterTest, IntrusiveMemberSetCommon):
     @classmethod
     def setUpClass(cls):
         execute_cpp_function('test_intrusive_avl_set_member')
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberSplayTreeSetTest(PrettyPrinterTest, IntrusiveMemberSetCommon):
     @classmethod
     def setUpClass(cls):
         execute_cpp_function('test_intrusive_splay_set_member')
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberSgTreeSetTest(PrettyPrinterTest, IntrusiveMemberSetCommon):
     @classmethod
     def setUpClass(cls):
         execute_cpp_function('test_intrusive_sg_set_member')
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveBaseListTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -653,7 +780,7 @@ class IntrusiveBaseListTest(PrettyPrinterTest):
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveBaseListDefaultTagTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -680,7 +807,7 @@ class IntrusiveBaseListDefaultTagTest(PrettyPrinterTest):
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberListTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -721,7 +848,7 @@ class IntrusiveMemberListTest(PrettyPrinterTest):
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveBaseSlistTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -762,7 +889,7 @@ class IntrusiveBaseSlistTest(PrettyPrinterTest):
         self.assertEqual(display_hint, None)
 
 
-@unittest.skipIf(boost_version < (1, 55), 'Tests for intrusive containers are not supported for boost < 1.55')
+@unittest.skipUnless((1, 55, 0) <= boost_version < (1, 70, 0), 'Tests for intrusive containers are not supported for boost < 1.55 or boost >= 1.70')
 class IntrusiveMemberSlistTest(PrettyPrinterTest):
     @classmethod
     def setUpClass(cls):
@@ -939,6 +1066,92 @@ class UnorderedMultisetTest(PrettyPrinterTest):
         possible_values = [{'value': item} for item in self.expected_content]
         self.assertIn(as_struct(children), possible_values)
         self.assertEqual(display_hint, None)
+
+class DurationTest(PrettyPrinterTest):
+    @classmethod
+    def setUpClass(cls):
+        execute_cpp_function('test_duration')
+
+    def test_empty(self):
+        string, children, display_hint = self.get_printer_result('empty_duration')
+        self.assertEqual(string,'(boost::posix_time::time_duration) 0')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+    def test_duration_130(self):
+        string, children, display_hint = self.get_printer_result('duration_130')
+        self.assertEqual(string,'(boost::posix_time::time_duration) 2m 10s')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+    def test_duration_neg_130(self):
+        string, children, display_hint = self.get_printer_result('duration_neg_130')
+        self.assertEqual(string,'(boost::posix_time::time_duration) -2m 10s')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+    def test_duration_with_ms(self):
+        string, children, display_hint = self.get_printer_result('duration_with_ms')
+        self.assertEqual(string,'(boost::posix_time::time_duration) 1m 1.010000s')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+    def test_duration_not_a_time(self):
+        string, children, display_hint = self.get_printer_result('duration_not_a_time')
+        self.assertEqual(string,'(boost::posix_time::time_duration) not a date time')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+    def test_duration_3600(self):
+        string, children, display_hint = self.get_printer_result('duration_3600')
+        self.assertEqual(string,'(boost::posix_time::time_duration) 1h')
+        self.assertEqual(children, None)
+        self.assertEqual(display_hint, None)
+
+@unittest.skipIf(boost_version < (1, 56, 0), 'implemented in boost 1.56 and later')
+class MultiIndexTest(PrettyPrinterTest):
+    @classmethod
+    def setUpClass(cls):
+        execute_cpp_function('test_multi_index')
+
+    def test_sequened_first_empty(self):
+        string, children, display_hint = self.get_printer_result('sf_empty')
+        self.assertTrue(string.startswith('empty'))
+        self.assertEqual(as_array(children, int), [])
+        self.assertIsNone(display_hint)
+
+    def test_ordered_first_empty(self):
+        string, children, display_hint = self.get_printer_result('of_empty')
+        self.assertTrue(string.startswith('empty'))
+        self.assertEqual(as_array(children, int), [])
+        self.assertIsNone(display_hint)
+
+    def test_hashed_first_empty(self):
+        string, children, display_hint = self.get_printer_result('hf_empty')
+        self.assertTrue(string.startswith('empty'))
+        self.assertEqual(as_array(children, int), [])
+        self.assertIsNone(display_hint)
+
+    def test_sequened_first(self):
+        string, children, display_hint = self.get_printer_result('sf_two')
+        self.assertEqual(as_array(children, int), [ 1, 2 ])
+        self.assertIsNone(display_hint)
+
+    def test_ordered_first(self):
+        string, children, display_hint = self.get_printer_result('of_two')
+        self.assertEqual(as_array(children, int), [ 1, 2 ])
+        self.assertIsNone(display_hint)
+
+    def test_hashed_first(self):
+        string, children, display_hint = self.get_printer_result('hf_two')
+        self.assertEqual(sorted(as_array(children, int)), [ 1, 2 ]) # unordered
+        self.assertIsNone(display_hint)
+
+    def test_hashed_first_over2_same_value(self):
+        string, children, display_hint = self.get_printer_result('hf_over_two_same_value')
+        self.assertEqual(sorted(as_array(children, int)), [ 1, 1, 1, 2, 2, 2, 2, 3, 3, 4]) # unordered
+        self.assertIsNone(display_hint)
+
 
 # TODO: More intrusive tests:
 # 1. Non-raw pointers

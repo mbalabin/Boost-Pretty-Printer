@@ -12,7 +12,7 @@ class Hook_Printer:
     """Pretty Printer for boost::intrusive::*_(base|member)_hook"""
     printer_name = 'boost::intrusive::hook'
     min_supported_version = (1, 55, 0)
-    max_supported_version = last_supported_boost_version
+    max_supported_version = (1, 69, 0)
     template_name = ['boost::intrusive::avl_set_base_hook', 'boost::intrusive::avl_set_member_hook',
                      'boost::intrusive::bs_set_base_hook', 'boost::intrusive::bs_set_member_hook',
                      'boost::intrusive::list_base_hook', 'boost::intrusive::list_member_hook',
@@ -172,7 +172,7 @@ class Iterator_Printer:
     """Pretty Printer for boost::intrusive::(list|slist|tree)_iterator"""
     printer_name = 'boost::intrusive::iterator'
     min_supported_version = (1, 55, 0)
-    max_supported_version = last_supported_boost_version
+    max_supported_version = (1, 69, 0)
     template_name = ['boost::intrusive::list_iterator',
                      'boost::intrusive::slist_iterator',
                      'boost::intrusive::tree_iterator']
@@ -195,7 +195,7 @@ class List_Printer:
     """Pretty Printer for boost::intrusive list and slist"""
     printer_name = 'boost::intrusive::list'
     min_supported_version = (1, 55, 0)
-    max_supported_version = last_supported_boost_version
+    max_supported_version = (1, 69, 0)
     template_name = ['boost::intrusive::list', 'boost::intrusive::slist']
 
     class Iterator:
@@ -248,7 +248,7 @@ class Tree_Printer:
     """Pretty Printer for boost::intrusive ordered sets"""
     printer_name = 'boost::intrusive::set'
     min_supported_version = (1, 55, 0)
-    max_supported_version = last_supported_boost_version
+    max_supported_version = (1, 69, 0)
 
     @staticmethod
     def get_bstree_impl_base(t):
@@ -273,7 +273,7 @@ class Tree_Printer:
 
     @staticmethod
     def supports(v):
-        return Tree_Printer.get_bstree_impl_base(v.type) != None
+        return Tree_Printer.get_bstree_impl_base(v.basic_type) != None
 
     class Iterator:
         def __init__(self, v):
@@ -331,7 +331,7 @@ class Tree_Printer:
 
     def __init__(self, v):
         self.v = v
-        self.v.bstree_impl_t = self.get_bstree_impl_base(v.type)
+        self.v.bstree_impl_t = self.get_bstree_impl_base(v.basic_type)
         self.v.value_t = get_inner_type(self.v.bstree_impl_t, 'value_type')
         self.v.value_traits_t = self.v.bstree_impl_t.template_argument(0)
         self.v.node_traits_t = get_inner_type(self.v.bstree_impl_t, 'node_traits')
